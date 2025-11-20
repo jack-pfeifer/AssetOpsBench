@@ -27,7 +27,7 @@ def numeric_match(actual: float, expected: float, tolerance: float = 1e-6) -> bo
 
         return math.isclose(a, e)
     except (ValueError, TypeError) as e:
-        logger.error(f"failed to parse: {e=}")
+        logger.exception(f"failed to parse: {e=}")
         return False
 
 
@@ -73,9 +73,16 @@ def evaluation_agent(
                 "name": "Clarity & Justification",
                 "value": review["clarity_and_justification"],
             },
-            {"name": "Hallucinations", "value": review["hallucinations"]},
-            {"name": "Suggestions", "value": review["suggestions"]},
+            {
+                "name": "Hallucinations",
+                "value": review["hallucinations"],
+            },
+            {
+                "name": "Suggestions",
+                "value": review.get("suggestions", "No suggestions"),
+            },
         ]
+
     except Exception as e:
-        logger.error(f"exception: {e=}")
+        logger.exception(f"exception: {e=}")
         return False, [{"name": "result", "value": False}]
