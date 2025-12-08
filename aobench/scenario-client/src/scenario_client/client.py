@@ -28,7 +28,7 @@ def set_ssl_context():
             logger.debug(f"setting verify ssl to context {ca_file=}")
             return ssl.create_default_context(cafile=ca_file)
     except Exception as e:
-        logger.error(f"failed to set ssl context {e=}, defaulting to True")
+        logger.exception(f"failed to set ssl context {e=}, defaulting to True")
         return True
 
 
@@ -92,7 +92,7 @@ class AOBench:
             }
 
         except Exception as e:
-            logger.error(f"aobench.run failed: {e=}")
+            logger.exception(f"aobench.run failed: {e=}")
             raise
 
         return answer
@@ -131,7 +131,7 @@ class AOBench:
             }
 
         except Exception as e:
-            logger.error(f"aobench.run failed: {e=}")
+            logger.exception(f"aobench.run failed: {e=}")
             raise
 
         return answer
@@ -192,7 +192,7 @@ class AOBench:
 
                     return scenario_set, tracking_context
                 except Exception as e:
-                    logger.error(f"failed to init tracking: {e=}")
+                    logger.exception(f"failed to init tracking: {e=}")
 
             return scenario_set, None
 

@@ -39,7 +39,7 @@ class AOBScenarios(ScenarioHandler):
                     self.scenario_data[str(sd["id"])] = sd
 
         except Exception as e:
-            logger.error(f"failed to init AOBScenarios: {e=}")
+            logger.exception(f"failed to init AOBScenarios: {e=}")
 
     def _grade_answer(self, entry_id, answer) -> SubmissionScore:
         try:
@@ -63,7 +63,7 @@ class AOBScenarios(ScenarioHandler):
                 details=details,
             )
         except Exception as e:
-            logger.error(f"failed to grade {entry_id=} : {e=}")
+            logger.exception(f"failed to grade {entry_id=} : {e=}")
             logger.debug(f"{entry_id=} / {answer=} / {self.scenario_data[entry_id]}")
             return SubmissionScore(
                 scenario_id=entry_id,
@@ -95,7 +95,7 @@ class AOBScenarios(ScenarioHandler):
                     )
                 )
             except Exception as e:
-                logger.error(f"failed to process {k}, {v} : {e=}")
+                logger.exception(f"failed to process {k}, {v} : {e=}")
 
         return scenarios
 
@@ -108,7 +108,7 @@ class AOBScenarios(ScenarioHandler):
             try:
                 entry_id: str = entry.scenario_id
             except Exception as e:
-                logger.error(f"missing scenario id: {entry=}")
+                logger.exception(f"missing scenario id: {entry=}")
                 continue
 
             if entry_id not in self.scenario_data:

@@ -23,7 +23,7 @@ def register_scenario_handlers(handlers: list):
         try:
             REGISTERED_SCENARIO_HANDLERS[handler.id] = handler()
         except Exception as e:
-            logger.error(f"failed to load {handler.title=}: {e=}")
+            logger.exception(f"failed to load {handler.title=}: {e=}")
 
 
 TRACKING_URI: str = ""
@@ -124,7 +124,7 @@ async def grade_submission(scenario_set_id: str, data: dict) -> dict:
                     if result.correct == True:
                         correct += 1
                 except Exception as e:
-                    logger.error(f"failed to log result: {e=}")
+                    logger.exception(f"failed to log result: {e=}")
 
                 for r in result.details:
                     try:
@@ -140,7 +140,7 @@ async def grade_submission(scenario_set_id: str, data: dict) -> dict:
                                 ),
                             )
                     except Exception as e:
-                        logger.error(f"failed to log assessment: {e=}")
+                        logger.exception(f"failed to log assessment: {e=}")
 
             mlflow.set_tag("Correct", f"{correct} / {len(results)}")
     else:

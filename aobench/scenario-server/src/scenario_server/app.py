@@ -60,6 +60,7 @@ def get_app(
     openapi_config: OpenAPIConfig | None = None,
 ) -> Litestar:
     if tracking_uri != "":
+        logger.info(f"{tracking_uri=}")
         set_tracking_uri(tracking_uri=tracking_uri)
 
     if len(handlers) > 0:
