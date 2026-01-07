@@ -9,7 +9,10 @@
 ![AAAI 2026](https://img.shields.io/badge/AAAI--2026-Accepted-blueviolet)
 
 **📘 Tutorials:** Learn more from our detailed guides —  
-[ReActXen IoT Agent (EMNLP 2025)](https://github.com/IBM/ReActXen/blob/main/docs/tutorial/ReActXen_IoT_Agent_EMNLP_2025.pdf) | [AssetOpsBench Technical Material](./docs/tutorial/AssetOpsBench_Technical_Material.pdf)
+[ReActXen IoT Agent (EMNLP 2025)](https://github.com/IBM/ReActXen/blob/main/docs/tutorial/ReActXen_IoT_Agent_EMNLP_2025.pdf) | 
+[FailureSensorIQ (NeurIPS 2025)](https://github.com/IBM/FailureSensorIQ) |
+[Spiral (AAAI 2026)](https://github.com/IBM/SPIRAL) |
+[AssetOpsBench Technical Material](./docs/tutorial/AssetOpsBench_Technical_Material.pdf)
 
 📄 [Paper](https://arxiv.org/pdf/2506.03828) | 🤗 [HF-Dataset](https://huggingface.co/datasets/ibm-research/AssetOpsBench) | 📢 [Blog](https://research.ibm.com/blog/asset-ops-benchmark) | [Contributors](#contributors)
 
@@ -36,14 +39,13 @@
 
 ## Announcements
       
-- 📰 **AAAI-2026 Demo:** **AssetOpsBench-Live: Privacy-Aware Online Evaluation of Multi-Agent Performance in Industrial Operations**  
-  ![AAAI 2026](https://img.shields.io/badge/Conference-AAAI_2026-1976D2)  
-  ![Status](https://img.shields.io/badge/Status-Demo_Coming-yellow)  
+- 📰 **AAAI-2026:** **SPIRAL: Symbolic LLM Planning via Grounded and Reflective Search**  
+![Authors](https://img.shields.io/badge/Authors-Y_Zhang,_G_Ganapavarapu,_S_Jayaraman,_B_Agrawal,_D_Patel,_A_Fokoue-lightgrey)
+  
+- 📰 **AAAI-2026 Demo:** **AssetOpsBench-Live: Privacy-Aware Online Evaluation of Multi-Agent Performance in Industrial Operations**   
   ![Authors](https://img.shields.io/badge/Authors-Dhaval_C_Patel,_Nianjun_Zhou,_Shuxin_Lin,_James_T_Rayfield,_Chathurangi_Shyalika,_Suryanarayana_R_Yarrabothula-lightgrey)
 
 - 🎯 **AAAI-2026 Lab:** **From Inception to Productization: Hands-on Lab for the Lifecycle of Multimodal Agentic AI in Industry 4.0**  
-  ![AAAI 2026](https://img.shields.io/badge/Conference-AAAI_2026-1976D2) 
-  ![Date](https://img.shields.io/badge/Date-Jan_20–21_2026-orange) 
   ![Website](https://img.shields.io/badge/Website-Agents_for_Industry_4.0_Applications-brightgreen) 
   ![Authors](https://img.shields.io/badge/Authors-Chathurangi_Shyalika,_Saumya_Ahuja,_Shuxin_Lin,_Ruwan_Wickramarachchi,_Dhaval_Patel,_Amit_Sheth-lightgrey)
 
