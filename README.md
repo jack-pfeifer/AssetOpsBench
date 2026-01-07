@@ -4,10 +4,9 @@
 
 ![AssetOps](https://img.shields.io/badge/Domain-Asset_Operations-blue) 
 ![MultiAgentBench](https://img.shields.io/badge/Domain-Multi--agent_Bench-blue) 
-![OpenAI](https://img.shields.io/badge/Model-OpenAI-21C2A4)
-![Llama](https://img.shields.io/badge/Model-Llama-21C2A4)    
-![Mistral](https://img.shields.io/badge/Model-Mistral-21C2A4) 
-![Granite](https://img.shields.io/badge/Model-Granite-21C2A4)
+![EMNLP 2025](https://img.shields.io/badge/EMNLP--2025-Accepted-blueviolet)
+![NeurIPS 2025](https://img.shields.io/badge/NeurIPS--2025-Accepted-blueviolet)
+![AAAI 2026](https://img.shields.io/badge/AAAI--2026-Accepted-blueviolet)
 
 **📘 Tutorials:** Learn more from our detailed guides —  
 [ReActXen IoT Agent (EMNLP 2025)](https://github.com/IBM/ReActXen/blob/main/docs/tutorial/ReActXen_IoT_Agent_EMNLP_2025.pdf) | [AssetOpsBench Technical Material](./docs/tutorial/AssetOpsBench_Technical_Material.pdf)
