@@ -225,3 +225,52 @@ class AOBench:
             r.raise_for_status()
 
             return r.json()
+
+    def deferred_grading(
+        self,
+        scenario_set_id: str,
+        answers,
+        tracking_context: dict | None,
+    ) -> dict:
+        with httpx.Client(verify=verify_ssl) as client:
+            endpoint: str = (
+                f"{self.scenario_uri}/scenario-set/{scenario_set_id}/deferred-grading"
+            )
+            logger.debug(f"{endpoint=}")
+
+            jsn = {
+                "scenario_set_id": scenario_set_id,
+                "submission": answers,
+            }
+
+            if tracking_context is not None:
+                mlflow.end_run()
+                jsn["tracking_context"] = {
+                    "experiment_id": tracking_context["experiment_id"],
+                    "run_id": tracking_context["run_id"],
+                }
+
+            r: httpx.Response = client.post(f"{endpoint}", json=jsn)
+            r.raise_for_status()
+
+            return r.json()
+
+    def deferred_grading_status(self, grading_id) -> dict:
+        with httpx.Client(verify=verify_ssl) as client:
+            endpoint: str = f"{self.scenario_uri}/deferred-grading/{grading_id}/status"
+            logger.debug(f"{endpoint=}")
+
+            r: httpx.Response = client.get(endpoint)
+            r.raise_for_status()
+
+            return r.json()
+
+    def deferred_grading_result(self, grading_id) -> dict:
+        with httpx.Client(verify=verify_ssl) as client:
+            endpoint: str = f"{self.scenario_uri}/deferred-grading/{grading_id}/result"
+            logger.debug(f"{endpoint=}")
+
+            r: httpx.Response = client.get(endpoint)
+            r.raise_for_status()
+
+            return r.json()

@@ -11,7 +11,8 @@ from scenario_server.entities import (
 from scenario_server.grading import evaluation_agent
 from scenario_server.handlers.scenario_handler import ScenarioHandler
 
-logger: logging.Logger = logging.getLogger("scenario-server")
+logger: logging.Logger = logging.getLogger(__name__)
+logger.debug(f"debug: {__name__}")
 
 HUGGINGFACE_REPO = "ibm-research/AssetOpsBench"
 HUGGINGFACE_DATA = "data/scenarios/all_utterance.jsonl"

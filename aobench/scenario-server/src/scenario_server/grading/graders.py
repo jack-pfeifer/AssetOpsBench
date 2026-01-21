@@ -3,8 +3,8 @@ import math
 
 from reactxen.agents.evaluation_agent.agent import EvaluationAgent
 
-
-logger: logging.Logger = logging.getLogger("scenario-server")
+logger: logging.Logger = logging.getLogger(__name__)
+logger.debug(f"debug: {__name__}")
 
 
 def exact_string_match(

@@ -1,4 +1,5 @@
 import logging
+import os
 import random
 import string
 import time
@@ -10,18 +11,18 @@ from litestar.response import Redirect
 from litestar.types import ASGIApp, Receive, Scope, Send
 from scenario_server.endpoints import (
     OPENAPI_CONFIG,
-    fetch_scenario,
-    grade_submission,
+    ROUTE_HANDLERS,
     register_scenario_handlers,
-    scenario_types,
     set_tracking_uri,
 )
+from scenario_server.grading import InMemGradingStorage, PostGresGradingStorage
 from scenario_server.handlers.aob.aob import AOBScenarios
 from scenario_server.handlers.aob_iot.aob_iot import AOBIoTScenarios
 from scenario_server.handlers.aob_tsfm.aob_tsfm import AOBTSFMScenarios
 from scenario_server.handlers.aob_workorders.aob_workorders import AOBWorkOrderScenarios
 
-logger: logging.Logger = logging.getLogger("scenario-server")
+logger: logging.Logger = logging.getLogger(__name__)
+logger.debug(f"debug: {__name__}")
 
 
 class RequestTimingMiddleware:
@@ -53,11 +54,39 @@ async def redirect_to_swagger() -> Redirect:
     return Redirect(path="/schema/swagger")
 
 
+async def startup(app: Litestar) -> None:
+    try:
+        pg_user: str = os.environ["POSTGRES_USERNAME"]
+        pg_pass: str = os.environ["POSTGRES_PASSWORD"]
+        pg_db: str = os.environ["POSTGRES_DATABASE"]
+        pg_host: str = os.environ["POSTGRES_HOST"]
+        pg_port: str = os.environ["POSTGRES_PORT"]
+
+        pg_url: str = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+
+        deferred_grading_storage = PostGresGradingStorage(database_url=pg_url)
+        await deferred_grading_storage.connect()
+        logger.info(f"deferred grading storage: {pg_host}:{pg_db}")
+    except Exception as e:
+        logger.exception(
+            f"failed to init deferred grading storage, using default: {e=}"
+        )
+        deferred_grading_storage = InMemGradingStorage()
+        logger.info("deferred grading storage: inmemory")
+
+    app.state.storage = deferred_grading_storage
+
+
+async def shutdown(app: Litestar) -> None:
+    await app.state.storage.close()
+
+
 def get_app(
     handlers: list = [],
     include_default_handlers: bool = True,
     tracking_uri: str = "",
     openapi_config: OpenAPIConfig | None = None,
+    debug: bool = False,
 ) -> Litestar:
     if tracking_uri != "":
         logger.info(f"{tracking_uri=}")
@@ -79,15 +108,12 @@ def get_app(
     openapi_cfg: OpenAPIConfig = openapi_config or OPENAPI_CONFIG
 
     app = Litestar(
-        debug=True,
+        debug=debug,
         middleware=[DefineMiddleware(RequestTimingMiddleware)],
-        route_handlers=[
-            redirect_to_swagger,
-            scenario_types,
-            fetch_scenario,
-            grade_submission,
-        ],
+        route_handlers=ROUTE_HANDLERS,
         openapi_config=openapi_cfg,
+        on_startup=[startup],
+        on_shutdown=[shutdown],
     )
 
     return app

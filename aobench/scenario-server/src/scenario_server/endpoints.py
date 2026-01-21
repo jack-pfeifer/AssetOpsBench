@@ -2,15 +2,30 @@ import logging
 import uuid
 
 import mlflow
-from litestar import get, post
+from litestar import Response, get, post
+from litestar.background_tasks import BackgroundTask
+from litestar.datastructures import State
 from litestar.exceptions import HTTPException
+from litestar.handlers.http_handlers.base import HTTPRouteHandler
 from litestar.openapi.config import OpenAPIConfig
-from litestar.status_codes import HTTP_404_NOT_FOUND
-from mlflow.entities import Feedback as MLFlowFeedback
-from mlflow.tracing.assessment import log_assessment
-from scenario_server.entities import ScenarioSet, ScenarioType, SubmissionAnswer
+from litestar.status_codes import (
+    HTTP_200_OK,
+    HTTP_202_ACCEPTED,
+    HTTP_404_NOT_FOUND,
+    HTTP_500_INTERNAL_SERVER_ERROR,
+)
+from scenario_server.entities import ScenarioSet, ScenarioType, SubmissionScore
+from scenario_server.grading import (
+    DeferredGradingResult,
+    DeferredGradingState,
+    DeferredGradingStatus,
+    DeferredGradingStorage,
+    grade_responses,
+    process_deferred_grading,
+)
 
-logger: logging.Logger = logging.getLogger("scenario-server")
+logger: logging.Logger = logging.getLogger(__name__)
+logger.debug(f"debug: {__name__}")
 
 
 REGISTERED_SCENARIO_HANDLERS = dict()
@@ -36,10 +51,130 @@ def set_tracking_uri(tracking_uri: str):
     mlflow.set_tracking_uri(uri=tracking_uri)
 
 
-@get("/scenario-types")
-async def scenario_types() -> list[ScenarioType]:
-    """Get all scenario types"""
-    return [rsh.scenario_type() for rsh in REGISTERED_SCENARIO_HANDLERS.values()]
+@post("/scenario-set/{scenario_set_id: str}/deferred-grading")
+async def deferred_grading(
+    scenario_set_id: str, data: dict, state: State
+) -> Response[DeferredGradingState]:
+    if scenario_set_id not in REGISTERED_SCENARIO_HANDLERS.keys():
+        raise HTTPException(
+            status_code=HTTP_404_NOT_FOUND,
+            detail=f"no scenario set {scenario_set_id}",
+        )
+
+    try:
+        grading_id = str(uuid.uuid4())
+        storage: DeferredGradingStorage = state.storage
+
+        await storage.store(
+            grading_id=grading_id,
+            data=DeferredGradingResult(
+                result=None,
+                status=DeferredGradingStatus.PROCESSING,
+                error=None,
+            ),
+        )
+    except Exception as e:
+        logger.exception(f"deferred grading storage failed: {e=}")
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"deferred storage failed",
+        )
+
+    try:
+        grading_fn = REGISTERED_SCENARIO_HANDLERS[scenario_set_id].grade_responses
+
+        bt = BackgroundTask(
+            process_deferred_grading,
+            grading_id,
+            grading_fn,
+            data,
+            storage,
+        )
+
+        return Response(
+            content=DeferredGradingState(
+                grading_id=grading_id,
+                status=DeferredGradingStatus.PROCESSING,
+            ),
+            background=bt,
+        )
+    except Exception as e:
+        logger.exception(f"grading failed: {e}")
+        await storage.store(
+            grading_id=grading_id,
+            data=DeferredGradingResult(
+                result=None,
+                status=DeferredGradingStatus.FAILED,
+                error=f"{e}",
+            ),
+        )
+
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"grading failed {scenario_set_id}",
+        )
+
+
+@get("/deferred-grading/{grading_id: str}/status")
+async def deferred_grading_status(
+    grading_id: str, state: State
+) -> DeferredGradingState:
+    try:
+        storage: DeferredGradingStorage = state.storage
+        return await storage.state(grading_id=grading_id)
+    except KeyError as ke:
+        logger.error(f"invalid {grading_id=}: {ke=}")
+        raise HTTPException(
+            status_code=HTTP_404_NOT_FOUND,
+            detail=f"grading id not found: {grading_id}",
+        )
+    except Exception as ex:
+        logger.exception(f"failed to fetch status {grading_id=}: {ex=}")
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"failed to determine status of {grading_id=}",
+        )
+
+
+@get("deferred-grading/{grading_id: str}/result")
+async def deferred_grading_result(
+    grading_id: str, state: State
+) -> list[SubmissionScore]:
+    try:
+        storage: DeferredGradingStorage = state.storage
+        grading_state: DeferredGradingState = await storage.state(grading_id=grading_id)
+        if grading_state.status == DeferredGradingStatus.PROCESSING:
+            raise HTTPException(
+                status_code=HTTP_202_ACCEPTED,
+                detail="grading still progressing",
+            )
+
+        if grading_state.status == DeferredGradingStatus.FAILED:
+            e: DeferredGradingResult = await storage.fetch(grading_id=grading_id)
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"grading failed: {e.error}",
+            )
+
+        result: DeferredGradingResult = await storage.fetch(grading_id=grading_id)
+        return result.result
+    except HTTPException as he:
+        logger.exception(f"{he=}")
+        raise
+
+    except KeyError as ke:
+        logger.exception(f"invalid {grading_id=}: {ke=}")
+        raise HTTPException(
+            status_code=HTTP_404_NOT_FOUND,
+            detail=f"grading id not found: {grading_id}",
+        )
+
+    except Exception as ex:
+        logger.exception(f"failed to fetch status/result {grading_id=}: {ex=}")
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"failed to fetch result {grading_id=}",
+        )
 
 
 @get("/scenario-set/{scenario_set_id: str}")
@@ -80,75 +215,35 @@ async def fetch_scenario(scenario_set_id: str, tracking: bool = False) -> dict:
 
 
 @post("/scenario-set/{scenario_set_id: str}/grade")
-async def grade_submission(scenario_set_id: str, data: dict) -> dict:
+async def grade_submission(scenario_set_id: str, data: dict) -> list[SubmissionScore]:
     if scenario_set_id not in REGISTERED_SCENARIO_HANDLERS.keys():
         raise HTTPException(
             status_code=HTTP_404_NOT_FOUND,
             detail=f"no scenario set {scenario_set_id}",
         )
 
-    submission: list[SubmissionAnswer] = [
-        SubmissionAnswer(scenario_id=s["scenario_id"], answer=s["answer"])
-        for s in data["submission"]
-    ]
+    try:
+        grading_fn = REGISTERED_SCENARIO_HANDLERS[scenario_set_id].grade_responses
+        results = await grade_responses(grader=grading_fn, data=data)
 
-    results = dict()
-    if "tracking_context" in data:
-        tracking_context = data["tracking_context"]
-        logger.info(f"{tracking_context=}")
-
-        experiment_id: str = tracking_context["experiment_id"]
-        run_id: str = tracking_context["run_id"]
-
-        mlflow.set_experiment(experiment_id=experiment_id)
-        with mlflow.start_run(run_id=run_id):
-            results = await REGISTERED_SCENARIO_HANDLERS[
-                scenario_set_id
-            ].grade_responses(submission)
-
-            traces = mlflow.search_traces(experiment_ids=[experiment_id], run_id=run_id)
-            correct = 0
-            for result in results:
-                result_id: str = result.scenario_id
-
-                mask = traces["tags"].apply(
-                    lambda d: isinstance(d, dict) and d.get("scenario_id") == result_id
-                )
-                trace_row = traces[mask]
-
-                try:
-                    tid = trace_row.iloc[0]["trace_id"]
-                    feedback = MLFlowFeedback(name="Correct", value=result.correct)
-                    log_assessment(trace_id=tid, assessment=feedback)
-
-                    if result.correct == True:
-                        correct += 1
-                except Exception as e:
-                    logger.exception(f"failed to log result: {e=}")
-
-                for r in result.details:
-                    try:
-                        tid = trace_row.iloc[0]["trace_id"]
-                        if isinstance(r, MLFlowFeedback):
-                            log_assessment(trace_id=tid, assessment=r)
-                        else:
-                            log_assessment(
-                                trace_id=tid,
-                                assessment=MLFlowFeedback(
-                                    name=r["name"],
-                                    value=r["value"],
-                                ),
-                            )
-                    except Exception as e:
-                        logger.exception(f"failed to log assessment: {e=}")
-
-            mlflow.set_tag("Correct", f"{correct} / {len(results)}")
-    else:
-        results = await REGISTERED_SCENARIO_HANDLERS[scenario_set_id].grade_responses(
-            submission
+        return results
+    except Exception as e:
+        logger.exception(f"grading failed: {e}")
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"grading failed {scenario_set_id}",
         )
 
-    return results
+
+@get("/health")
+async def health() -> dict[str, int]:
+    return {"status": HTTP_200_OK}
+
+
+@get("/scenario-types")
+async def scenario_types() -> list[ScenarioType]:
+    """Get all scenario types"""
+    return [rsh.scenario_type() for rsh in REGISTERED_SCENARIO_HANDLERS.values()]
 
 
 OPENAPI_CONFIG = OpenAPIConfig(
@@ -157,4 +252,12 @@ OPENAPI_CONFIG = OpenAPIConfig(
     version="0.0.1",
 )
 
-ROUTE_HANDLERS = [scenario_types, fetch_scenario, grade_submission]
+ROUTE_HANDLERS: list[HTTPRouteHandler] = [
+    health,
+    scenario_types,
+    fetch_scenario,
+    grade_submission,
+    deferred_grading,
+    deferred_grading_status,
+    deferred_grading_result,
+]

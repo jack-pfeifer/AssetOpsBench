@@ -5,6 +5,7 @@ description = "Asset operations benchmarking"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "asyncpg>=0.31.0",
     "huggingface-hub>=0.35.3",
     "scenario-client",
     "scenario-server",
