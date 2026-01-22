@@ -1,6 +1,9 @@
 import logging
 import math
 
+from sentence_transformers import SentenceTransformer
+from sentence_transformers.util import cos_sim
+
 from reactxen.agents.evaluation_agent.agent import EvaluationAgent
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -86,3 +89,15 @@ def evaluation_agent(
     except Exception as e:
         logger.exception(f"exception: {e=}")
         return False, [{"name": "result", "value": False}]
+
+
+def cosine_similarity(x:str, y:str, emedding_model:str="all-MiniLM-L6-v2") -> float:
+    """Cosine similarity between strings"""
+    model = SentenceTransformer(emedding_model)
+
+    xembed = model.encode(x)
+    yembed = model.encode(y)
+
+    simscore = cos_sim(xembed, yembed)
+    
+    return float(simscore)

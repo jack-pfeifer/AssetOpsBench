@@ -9,6 +9,7 @@ dependencies = [
     "huggingface-hub>=0.35.3",
     "scenario-client",
     "scenario-server",
+    "sentence-transformers>=5.2.0",
 ]
 
 
