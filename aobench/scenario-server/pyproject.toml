@@ -9,7 +9,6 @@ dependencies = [
     "litestar[jinja]>=2.17.0",
     "mlflow>=3.4.0",
     "reactxen",
-    "sentence-transformers>=5.2.0",
 ]
 
 [build-system]
