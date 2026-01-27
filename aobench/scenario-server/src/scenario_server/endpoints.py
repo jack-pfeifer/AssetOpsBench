@@ -14,7 +14,13 @@ from litestar.status_codes import (
     HTTP_404_NOT_FOUND,
     HTTP_500_INTERNAL_SERVER_ERROR,
 )
-from scenario_server.entities import ScenarioSet, ScenarioType, ScenarioGrade
+from pydantic import BaseModel, Field
+from scenario_server.entities import (
+    ScenarioGrade,
+    ScenarioSet,
+    ScenarioType,
+    SubmissionResult,
+)
 from scenario_server.grading import (
     DeferredGradingResult,
     DeferredGradingState,
@@ -51,9 +57,29 @@ def set_tracking_uri(tracking_uri: str):
     mlflow.set_tracking_uri(uri=tracking_uri)
 
 
+class Answer(BaseModel):
+    scenario_id: str = Field(
+        description="Unique identifier for the scenario being answered"
+    )
+    answer: str = Field(
+        description=(
+            "Serialized answer content as a string. The answer must be encoded "
+            "using appropriate serialization methods (e.g., json.dumps() for JSON objects, "
+            "base64.b64encode() for binary data) depending on the handler implementation. "
+            "Refer to the specific scenario handler documentation for the expected format."
+        )
+    )
+
+
+class Submission(BaseModel):
+    submission: list[Answer] = Field(
+        description="List of answers for one or more scenarios in this submission"
+    )
+
+
 @post("/scenario-set/{scenario_set_id: str}/deferred-grading")
 async def deferred_grading(
-    scenario_set_id: str, data: dict, state: State
+    scenario_set_id: str, data: Submission, state: State
 ) -> Response[DeferredGradingState]:
     if scenario_set_id not in REGISTERED_SCENARIO_HANDLERS.keys():
         raise HTTPException(
@@ -87,7 +113,7 @@ async def deferred_grading(
             process_deferred_grading,
             grading_id,
             grading_fn,
-            data,
+            data.model_dump(),
             storage,
         )
 
@@ -213,7 +239,9 @@ async def fetch_scenario(scenario_set_id: str, tracking: bool = False) -> dict:
 
 
 @post("/scenario-set/{scenario_set_id: str}/grade")
-async def grade_submission(scenario_set_id: str, data: dict) -> list[ScenarioGrade]:
+async def grade_submission(
+    scenario_set_id: str, data: Submission
+) -> list[ScenarioGrade]:
     if scenario_set_id not in REGISTERED_SCENARIO_HANDLERS.keys():
         raise HTTPException(
             status_code=HTTP_404_NOT_FOUND,
@@ -222,7 +250,10 @@ async def grade_submission(scenario_set_id: str, data: dict) -> list[ScenarioGra
 
     try:
         grading_fn = REGISTERED_SCENARIO_HANDLERS[scenario_set_id].grade_responses
-        results = await grade_responses(grader=grading_fn, data=data)
+        results: SubmissionResult = await grade_responses(
+            grader=grading_fn,
+            data=data.model_dump(),
+        )
 
         return results
     except Exception as e:
