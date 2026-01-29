@@ -71,10 +71,17 @@ class Answer(BaseModel):
     )
 
 
+class TrackingContext(BaseModel):
+    uri: str = TRACKING_URI
+    experiment_id: str
+    run_id: str
+
+
 class Submission(BaseModel):
     submission: list[Answer] = Field(
         description="List of answers for one or more scenarios in this submission"
     )
+    tracking_context: TrackingContext | None = None
 
 
 @post("/scenario-set/{scenario_set_id: str}/deferred-grading")
