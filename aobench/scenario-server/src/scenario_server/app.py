@@ -43,10 +43,20 @@ class RequestTimingMiddleware:
             logger.info(f"[{rid}] > request: {rp} {rc}")
 
             t1: float = time.perf_counter()
-            await self.app(scope, receive, send)
+
+            async def send_wrapper(message):
+                if message["type"] == "http.response.body" and not message.get(
+                    "more_body", False
+                ):
+                    t3: float = time.perf_counter() - t1
+                    logger.info(f"[{rid}] < response-bg: {rp} {rc} ~ {t3:0.5f}")
+
+                await send(message)
+
+            await self.app(scope, receive, send_wrapper)
             t2: float = time.perf_counter() - t1
 
-            logger.info(f"[{rid}] < response: {rp} {rc} ~ {t2:0.5f}")
+            logger.info(f"[{rid}] < response+bg: {rp} {rc} ~ {t2:0.5f}")
         else:
             await self.app(scope, receive, send)
 
