@@ -1,16 +1,26 @@
 import asyncio
 import logging
+import time
 
 import mlflow
+from mlflow import MlflowClient
 from mlflow.entities import Feedback as MLFlowFeedback
+from mlflow.entities.trace import Trace
+from mlflow.store.entities.paged_list import PagedList
 from mlflow.tracing.assessment import log_assessment
+from mlflow.tracing.utils.search import traces_to_df
+from pandas import DataFrame
 from scenario_server.entities import ScenarioAnswer, SubmissionResult
 
 logger: logging.Logger = logging.getLogger(__name__)
 logger.debug(f"debug: {__name__}")
 
 
-def mlflow_logging(tracking_context, results: SubmissionResult):
+def mlflow_logging(
+    tracking_context,
+    results: SubmissionResult,
+    pagination_stride: int = 32,
+):
     logger.debug(f"{tracking_context=}")
 
     experiment_id: str = tracking_context["experiment_id"]
@@ -18,16 +28,45 @@ def mlflow_logging(tracking_context, results: SubmissionResult):
 
     mlflow.set_experiment(experiment_id=experiment_id)
     with mlflow.start_run(run_id=run_id):
-        traces = mlflow.search_traces(experiment_ids=[experiment_id], run_id=run_id)
-        logger.debug(f"{len(traces)=}")
+        client = MlflowClient()
+
+        all_traces: list[Trace] = []
+        page_token = None
+
+        t1: float = time.perf_counter()
+
+        count = 0
+        while True:
+            count += 1
+            t3: float = time.perf_counter()
+            traces: PagedList[Trace] = client.search_traces(
+                locations=[experiment_id],
+                run_id=run_id,
+                max_results=pagination_stride,
+                page_token=page_token,
+            )
+            t4: float = time.perf_counter() - t3
+            logger.debug(f"{len(traces)=} [{count}] ~ {t4:0.5f}")
+
+            all_traces.extend(traces)
+
+            page_token = traces.token
+            if not page_token:
+                break
+
+        t2: float = time.perf_counter() - t1
+        logger.debug(f"{len(all_traces)=} ~ {t2:0.5f}")
+
+        all_traces_df: DataFrame = traces_to_df(all_traces)
+        logger.debug(f"{len(all_traces_df)=}")
 
         for grade in results.grades:
             result_id: str = grade.scenario_id
 
-            mask = traces["tags"].apply(
+            mask = all_traces_df["tags"].apply(
                 lambda d: isinstance(d, dict) and d.get("scenario_id") == result_id
             )
-            trace_row = traces[mask]
+            trace_row: DataFrame = all_traces_df[mask]
 
             try:
                 tid = trace_row.iloc[0]["trace_id"]
