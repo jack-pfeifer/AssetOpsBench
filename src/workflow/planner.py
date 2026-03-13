@@ -1,124 +1,203 @@
-"""LLM-based plan generation for the plan-execute orchestrator.
-
-Each plan step now includes the specific tool to call and its arguments,
-so the executor needs no additional LLM calls — it calls the tool directly.
-"""
-
-from __future__ import annotations
-
+from agent_hive.task import Task
+from pydantic import Field
+from typing import List
+from agent_hive.enum import ContextType
 import json
+from agent_hive.workflows.base_workflow import Workflow
+from reactxen.utils.model_inference import watsonx_llm
 import re
 
-from llm import LLMBackend
-from .models import Plan, PlanStep
+from agent_hive.workflows.sequential import SequentialWorkflow
+from agent_hive.logger import get_custom_logger
 
-_PLAN_PROMPT = """\
-You are a planning assistant for industrial asset operations and maintenance.
+logger = get_custom_logger(__name__)
 
-Decompose the question below into a sequence of subtasks. For each subtask,
-assign an agent and select the exact tool to call with its arguments.
 
-Available agents and tools:
-{agents}
+class PlanningWorkflow(Workflow):
+    """
+    This class represents a planning workflow, where the (parent) task is decomposed into multiple subtasks by
+    LLM-based Rewoo planning and then executed sequentially.
+    """
 
-For argument values that can only be known from a prior step's result,
-use the placeholder {{step_N}} (e.g., {{step_1}}) as the value.
+    llm: str = Field(description="LLM used by the task planning.")
 
-Output format — one block per step, exactly:
+    def __init__(self, tasks: List[Task], llm: str):
+        self.tasks = tasks
+        self.memory = []
+        self.max_memory = 10
+        self.llm = llm
+        self._verify_tasks()
 
-#Task1: <task description>
-#Agent1: <exact agent name>
-#Tool1: <exact tool name, or "none" if no tool call is needed>
-#Args1: <JSON object of tool arguments, e.g. {{"site_name": "MAIN"}}>
+    def _verify_tasks(self):
+        if not isinstance(self.tasks, list):
+            raise ValueError("tasks must be a list of Task objects")
+        if len(self.tasks) != 1:
+            raise ValueError("Planning only supports one task")
+        task = self.tasks[0]
+        if task.agents is None or len(task.agents) < 1:
+            raise ValueError("Task must have at least one agent")
+
+    def run(self, enable_summarization=False):
+        generated_steps = self.generate_steps()
+
+        if enable_summarization:
+            from agent_hive.agents.summarization_agent import SummarizationAgent
+
+            summarization_task = Task(
+                description=self.tasks[0].description,
+                expected_output=self.tasks[0].expected_output,
+                agents=[SummarizationAgent(llm=self.llm)],
+                context=generated_steps[:],
+            )
+            generated_steps.append(summarization_task)
+
+        sequential_workflow = SequentialWorkflow(
+            tasks=generated_steps, context_type=ContextType.SELECTED
+        )
+
+        return sequential_workflow.run()
+
+    def generate_steps(self, save_plan=False, saved_plan_filename=""):
+        task = self.tasks[0]
+        agent_descriptions = ""
+
+        for ii, aagent in enumerate(task.agents):
+            agent_descriptions += f"\n({ii + 1}) Agent name: {aagent.name}"
+            agent_descriptions += f"\nAgent description: {aagent.description}"
+            if "task_examples" in aagent.__dict__ and aagent.task_examples:
+                agent_descriptions += "\nTasks that agent can solve:"
+                for idx, task_example in enumerate(aagent.task_examples, start=1):
+                    agent_descriptions += f"\n{idx}. {task_example}"
+            agent_descriptions += "\n"
+
+        def get_prompt():
+            return f"""
+You are an AI assistant who makes step-by-step plan to solve a complicated problem under the help of external agents. 
+For each step, make one task followed by one agent-call.
+Each step denoted by #S1, #S2, #S3 ... can be referred to in later steps as a dependency.
+
+Each step must contain Task, Agent, Dependency and ExpectedOutput.
+
+## Output Format (Replace '<...>') ##
+
+## Step 1
+#Task1: <describe your task here>
+#Agent1: <agent_name>
 #Dependency1: None
-#ExpectedOutput1: <what this step should produce>
+#ExpectedOutput1: <describe the expected output of the call>
 
-#Task2: <task description>
-#Agent2: <exact agent name>
-#Tool2: <exact tool name>
-#Args2: {{"site_name": "MAIN", "asset_id": "{{step_1}}"}}
-#Dependency2: #S1
-#ExpectedOutput2: <what this step should produce>
+## Step 2
+#Task2: <describe next task>
+#Agent2: <agent_name>
+#Dependency2: [<you can use #S1 and more to represent previous outputs as a dependency>]
+#ExpectedOutput2: <describe the expected output of the call>
 
-Rules:
-- Agent and tool names must exactly match those listed above.
-- #Args must be a valid JSON object on a single line.
-- Use {{step_N}} as a placeholder when an argument depends on step N's result.
-- Dependencies use #S<N> notation (e.g., #S1, #S2). Use "None" if none.
-- Keep tasks specific and actionable.
+And so on...
 
-Question: {question}
+Here are the available agents:
+{agent_descriptions}
+ 
+You are going to solve the following complicated problem:
+{task.description}
 
-Plan:
+Guidelines:
+- Task should be something that can be solved by the agent.
+- A plan usually contains less than 5 steps.
+- Only output the generated plan.
+
+Output (your generated plan):
 """
 
-_TASK_RE = re.compile(r"#Task(\d+):\s*(.+)")
-_AGENT_RE = re.compile(r"#Agent(\d+):\s*(.+)")
-_TOOL_RE = re.compile(r"#Tool(\d+):\s*(.+)")
-_ARGS_RE = re.compile(r"#Args(\d+):\s*(.+)")
-_DEP_RE = re.compile(r"#Dependency(\d+):\s*(.+)")
-_OUTPUT_RE = re.compile(r"#ExpectedOutput(\d+):\s*(.+)")
-_DEP_NUM_RE = re.compile(r"#S(\d+)")
+        prompt = get_prompt()
 
+        logger.info(f"Planning Prompt: \n{prompt}")
 
-def parse_plan(raw: str) -> Plan:
-    """Parse an LLM-generated plan string into a Plan object."""
-    tasks = {int(m.group(1)): m.group(2).strip() for m in _TASK_RE.finditer(raw)}
-    agents = {int(m.group(1)): m.group(2).strip() for m in _AGENT_RE.finditer(raw)}
-    tools = {int(m.group(1)): m.group(2).strip() for m in _TOOL_RE.finditer(raw)}
-    deps_raw = {int(m.group(1)): m.group(2).strip() for m in _DEP_RE.finditer(raw)}
-    outputs = {int(m.group(1)): m.group(2).strip() for m in _OUTPUT_RE.finditer(raw)}
+        llm_response = watsonx_llm(prompt, model_id=self.llm)["generated_text"]
 
-    args: dict[int, dict] = {}
-    for m in _ARGS_RE.finditer(raw):
-        n = int(m.group(1))
-        try:
-            args[n] = json.loads(m.group(2).strip())
-        except json.JSONDecodeError:
-            args[n] = {}
+        logger.info(f"Plan: \n{llm_response}")
 
-    steps = [
-        PlanStep(
-            step_number=n,
-            task=tasks[n],
-            agent=agents.get(n, ""),
-            tool=tools.get(n, ""),
-            tool_args=args.get(n, {}),
-            dependencies=(
-                []
-                if deps_raw.get(n, "None").strip().lower() == "none"
-                else [int(x) for x in _DEP_NUM_RE.findall(deps_raw.get(n, ""))]
-            ),
-            expected_output=outputs.get(n, ""),
-        )
-        for n in sorted(tasks)
-    ]
-    return Plan(steps=steps, raw=raw)
+        self.memory = []
 
+        task_pattern = r"#Task\d+: (.+)"
+        agent_pattern = r"#Agent\d+: (.+)"
+        dependency_pattern = r"#Dependency\d+: (.+)"
+        output_pattern = r"#ExpectedOutput\d+: (.+)"
 
-class Planner:
-    """Decomposes a question into a structured execution plan using an LLM."""
+        tasks = re.findall(task_pattern, llm_response)
+        agents = re.findall(agent_pattern, llm_response)
+        dependencies = re.findall(dependency_pattern, llm_response)
+        outputs = re.findall(output_pattern, llm_response)
 
-    def __init__(self, llm: LLMBackend) -> None:
-        self._llm = llm
+        if save_plan:
+            if not saved_plan_filename.endswith(".txt"):
+                saved_plan_filename += ".txt"
 
-    def generate_plan(
-        self,
-        question: str,
-        agent_descriptions: dict[str, str],
-    ) -> Plan:
-        """Generate a plan for a question given available agents and their tools.
+            saved_plan_text = f"Question: {task.description}\nPlan:\n{llm_response}"
+            with open(saved_plan_filename, "w") as f:
+                f.write(saved_plan_text)
 
-        Args:
-            question: The user question to answer.
-            agent_descriptions: Mapping of agent_name -> formatted tool signatures.
+        planned_tasks = []
 
-        Returns:
-            A Plan where each PlanStep includes the tool to call and its arguments.
-        """
-        agents_text = "\n\n".join(
-            f"{name}:\n{desc}" for name, desc in agent_descriptions.items()
-        )
-        prompt = _PLAN_PROMPT.format(agents=agents_text, question=question)
-        raw = self._llm.generate(prompt)
-        return parse_plan(raw)
+        for i in range(len(tasks)):
+            task_description = tasks[i]
+
+            if i == len(agents):
+                break
+
+            agent_name = agents[i]
+
+            if i < len(dependencies):
+                dependency = dependencies[i]
+            else:
+                dependency = "None"
+
+            if i < len(outputs):
+                expected_output = outputs[i]
+            else:
+                expected_output = ""
+
+            # Make sure the planner returned a valid agent name.
+            # Previously the code defaulted to the first agent, which could hide mistakes.
+            selected_agent = None
+            for agent in task.agents:
+                if agent.name == agent_name:
+                    selected_agent = agent
+                    break
+
+            if selected_agent is None:
+                raise ValueError(
+                    f"Planner selected unknown agent '{agent_name}' at step {i + 1}"
+                )
+
+            # Validate dependency references before building context.
+            # Ensures the planner only references valid previous steps.
+            if dependency != "None":
+                numbers = re.findall(r"#S(\d+)", dependency)
+
+                if not numbers:
+                    raise ValueError(
+                        f"Invalid dependency format at step {i + 1}: {dependency}"
+                    )
+
+                step_numbers = [int(num) for num in numbers]
+
+                for step_num in step_numbers:
+                    if step_num < 1 or step_num > len(planned_tasks):
+                        raise ValueError(
+                            f"Invalid dependency reference at step {i + 1}: #S{step_num}"
+                        )
+
+                context = [planned_tasks[step_num - 1] for step_num in step_numbers]
+            else:
+                context = []
+
+            a_task = Task(
+                description=task_description,
+                expected_output=expected_output,
+                agents=[selected_agent],
+                context=context,
+            )
+
+            planned_tasks.append(a_task)
+
+        return planned_tasks
