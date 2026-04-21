@@ -87,7 +87,10 @@
         border: 1px solid color-mix(in srgb, var(--line) 78%, var(--panel));
         border-radius: 8px;
         box-shadow: var(--shadow-md);
-        min-height: calc(100vh - 48px);
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        height: calc(100vh - 48px);
+        min-height: 0;
         overflow: hidden;
         position: relative;
       }
@@ -192,6 +195,8 @@
 
       .view {
         animation: view-enter 180ms ease;
+        min-height: 0;
+        overflow: auto;
         padding: 18px;
       }
 
@@ -211,9 +216,16 @@
         display: none;
       }
 
+      #ask-view {
+        overflow: hidden;
+      }
+
       .ask-layout {
         display: grid;
         gap: 14px;
+        grid-template-rows: minmax(0, 1fr) auto auto;
+        height: 100%;
+        min-height: 0;
       }
 
       .conversation {
@@ -226,7 +238,7 @@
         display: grid;
         gap: 12px;
         grid-template-rows: auto 1fr auto;
-        min-height: 500px;
+        min-height: 0;
         overflow: hidden;
         padding: 0;
       }
@@ -293,6 +305,7 @@
         align-content: start;
         display: grid;
         gap: 12px;
+        min-height: 0;
         overflow-y: auto;
         padding: 16px;
       }
@@ -384,24 +397,75 @@
       }
 
       .trace {
+        background: transparent;
+        border: 0;
         border-top: 1px solid var(--line);
-        display: grid;
-        gap: 8px;
+        border-radius: 0;
+        box-shadow: none;
         margin-top: 10px;
-        padding-top: 10px;
+        padding: 0;
+      }
+
+      .trace[open] {
+        border-color: var(--line);
+      }
+
+      .trace > summary {
+        align-items: center;
+        background: transparent;
+        color: var(--muted);
+        display: flex;
+        font-size: 12px;
+        gap: 8px;
+        justify-content: space-between;
+        padding: 8px 0 0;
+      }
+
+      .trace[open] > summary {
+        background: transparent;
+      }
+
+      .trace-count {
+        background: var(--soft-gradient);
+        border: 1px solid color-mix(in srgb, var(--line) 84%, var(--panel));
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 720;
+        padding: 2px 7px;
+      }
+
+      .trace-body {
+        display: grid;
+        gap: 6px;
+        padding-top: 8px;
       }
 
       .trace-row {
+        align-items: start;
         background: var(--soft-gradient);
         border: 1px solid color-mix(in srgb, var(--line) 84%, var(--panel));
         border-radius: 7px;
         color: var(--muted);
-        font-size: 13px;
-        padding: 8px;
+        display: grid;
+        font-size: 12px;
+        gap: 2px;
+        grid-template-columns: auto minmax(0, 1fr);
+        padding: 6px 8px;
       }
 
       .trace-row strong {
         color: var(--text);
+      }
+
+      .trace-step-meta {
+        color: var(--muted);
+        overflow-wrap: anywhere;
+      }
+
+      .trace-step-task {
+        grid-column: 1 / -1;
+        overflow-wrap: anywhere;
       }
 
       .composer {
@@ -412,6 +476,20 @@
         display: grid;
         gap: 10px;
         padding: 10px;
+      }
+
+      .ask-output {
+        display: grid;
+        gap: 10px;
+        max-height: 28vh;
+        overflow-y: auto;
+      }
+
+      .ask-output .answer,
+      .ask-output .error,
+      .ask-output .metrics,
+      .ask-output .status {
+        margin-top: 0;
       }
 
       .composer-row {
@@ -859,6 +937,10 @@
           padding: 12px;
         }
 
+        .shell {
+          height: calc(100vh - 24px);
+        }
+
         .topbar {
           align-items: stretch;
           flex-direction: column;
@@ -879,7 +961,7 @@
         }
 
         .conversation {
-          min-height: 360px;
+          min-height: 0;
         }
 
         .chat-toolbar {
@@ -968,12 +1050,14 @@
                 <button id="ask">Ask</button>
               </div>
             </div>
-          </div>
 
-          <div id="status" class="status">Loading models...</div>
-          <div id="metrics" class="metrics" hidden></div>
-          <div id="answer" class="answer" hidden></div>
-          <div id="error" class="error" hidden></div>
+            <div class="ask-output" aria-live="polite">
+              <div id="status" class="status">Loading models...</div>
+              <div id="metrics" class="metrics" hidden></div>
+              <div id="answer" class="answer" hidden></div>
+              <div id="error" class="error" hidden></div>
+            </div>
+          </div>
         </section>
 
         <section id="evaluation-view" class="view" role="tabpanel" aria-labelledby="evaluation-tab" hidden>
@@ -1024,6 +1108,7 @@
       const metricsEl = document.getElementById("metrics");
       const answerEl = document.getElementById("answer");
       const errorEl = document.getElementById("error");
+      const conversation = document.querySelector(".conversation");
       const chatLog = document.getElementById("chat-log");
       const activityLog = document.getElementById("activity-log");
       const askTab = document.getElementById("ask-tab");
@@ -1211,6 +1296,16 @@
         workFlyout.setAttribute("aria-hidden", "true");
       }
 
+      function scrollConversationToBottom(behavior = "smooth") {
+        requestAnimationFrame(() => {
+          chatLog.scrollTop = chatLog.scrollHeight;
+          if (conversation) {
+            conversation.scrollTop = conversation.scrollHeight;
+          }
+          activityLog.scrollIntoView({ block: "end", behavior });
+        });
+      }
+
       function appendMessage(role, text) {
         const message = document.createElement("div");
         message.className = `message ${role}`;
@@ -1225,7 +1320,7 @@
 
         message.append(label, bubble);
         chatLog.appendChild(message);
-        message.scrollIntoView({ block: "end", behavior: "smooth" });
+        scrollConversationToBottom();
         notifySize();
         return bubble;
       }
@@ -1247,6 +1342,7 @@
           }),
         );
         activityLog.hidden = false;
+        scrollConversationToBottom("auto");
         notifySize();
       }
 
@@ -1285,21 +1381,33 @@
         }
 
         activityLog.hidden = true;
-        const trace = document.createElement("div");
+        const trace = document.createElement("details");
         trace.className = "trace";
+
+        const summary = document.createElement("summary");
+        const summaryText = document.createElement("span");
+        summaryText.textContent = "Run trace";
+        const summaryCount = document.createElement("span");
+        summaryCount.className = "trace-count";
+        summaryCount.textContent = `${plan.length} plan · ${trajectory.length} run`;
+        summary.append(summaryText, summaryCount);
+
+        const traceBody = document.createElement("div");
+        traceBody.className = "trace-body";
 
         plan.forEach((step) => {
           const row = document.createElement("div");
           row.className = "trace-row";
           const title = document.createElement("strong");
           title.textContent = `Plan ${step.step}`;
-          row.append(
-            title,
-            ` · ${step.server || "server"} · ${step.tool || "tool"}`,
-            document.createElement("br"),
-            step.task || "",
-          );
-          trace.appendChild(row);
+          const meta = document.createElement("span");
+          meta.className = "trace-step-meta";
+          meta.textContent = `${step.server || "server"} · ${step.tool || "tool"}`;
+          const task = document.createElement("span");
+          task.className = "trace-step-task";
+          task.textContent = step.task || "";
+          row.append(title, meta, task);
+          traceBody.appendChild(row);
         });
 
         trajectory.forEach((step) => {
@@ -1308,10 +1416,14 @@
           const status = step.success ? "OK" : "Error";
           const title = document.createElement("strong");
           title.textContent = `${status}: step ${step.step}`;
-          row.append(title, ` · ${step.server || "server"} · ${step.tool || "tool"}`);
-          trace.appendChild(row);
+          const meta = document.createElement("span");
+          meta.className = "trace-step-meta";
+          meta.textContent = `${step.server || "server"} · ${step.tool || "tool"}`;
+          row.append(title, meta);
+          traceBody.appendChild(row);
         });
 
+        trace.append(summary, traceBody);
         bubble.appendChild(trace);
         notifySize();
       }
