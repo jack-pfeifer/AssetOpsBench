@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -270,10 +271,13 @@ def _make_stdio_params(server: Path | str) -> "StdioServerParameters":
     from mcp import StdioServerParameters
 
     if isinstance(server, str):
+        env = os.environ.copy()
+        env.setdefault("UV_CACHE_DIR", "/tmp/uv-cache")
         return StdioServerParameters(
             command="uv",
             args=["run", server],
             cwd=str(_REPO_ROOT),
+            env=env,
         )
     try:
         rel = server.relative_to(_REPO_ROOT)

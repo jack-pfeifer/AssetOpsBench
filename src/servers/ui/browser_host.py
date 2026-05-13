@@ -8,12 +8,20 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel
 
-from .main import ASK_UI_PATH, ask_aob, list_evaluation_questions, list_models, run_evaluation
+from .main import (
+    ASK_UI_PATH,
+    ask_aob,
+    get_evaluation_progress,
+    list_evaluation_questions,
+    list_models,
+    run_evaluation,
+)
 
 logger = logging.getLogger("ui-browser-host")
 
 TOOL_HANDLERS = {
     "ask_aob": ask_aob,
+    "get_evaluation_progress": get_evaluation_progress,
     "list_evaluation_questions": list_evaluation_questions,
     "list_models": list_models,
     "run_evaluation": run_evaluation,

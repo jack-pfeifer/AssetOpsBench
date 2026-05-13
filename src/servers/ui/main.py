@@ -1,7 +1,10 @@
 import json
 import logging
+import os
+import re
 import subprocess
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -88,6 +91,8 @@ class EvaluationResultRow(BaseModel):
     answer: str
     error: Optional[str] = None
     evaluation_details: dict[str, Any] = Field(default_factory=dict)
+    plan: Optional[list[dict[str, Any]]] = None
+    trajectory: Optional[list[dict[str, Any]]] = None
 
 
 class LeaderboardRow(BaseModel):
@@ -108,6 +113,27 @@ class EvaluationRunResult(BaseModel):
     warning: Optional[str] = None
 
 
+class EvaluationProgressResult(BaseModel):
+    active: bool = False
+    status: str = "idle"
+    run_id: Optional[str] = None
+    total_runs: int = 0
+    completed_runs: int = 0
+    failed_runs: int = 0
+    current_question_id: Optional[str] = None
+    current_question_number: int = 0
+    total_questions: int = 0
+    current_model: Optional[str] = None
+    elapsed_seconds: float = 0.0
+    average_run_seconds: float = 0.0
+    estimated_remaining_seconds: Optional[float] = None
+    percent_complete: float = 0.0
+    last_completed: Optional[str] = None
+
+
+EVALUATION_PROGRESS: dict[str, Any] = EvaluationProgressResult().model_dump()
+
+
 def model_label(model_id: str) -> str:
     label = model_id.removeprefix("watsonx/")
     label = label.replace("/", " / ").replace("-", " ")
@@ -116,6 +142,49 @@ def model_label(model_id: str) -> str:
 
 def estimate_tokens(text: str) -> int:
     return max(1, round(len(text.split()) * 1.3)) if text.strip() else 0
+
+
+def plan_execute_environment() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("UV_CACHE_DIR", "/tmp/uv-cache")
+    return env
+
+
+def summarize_process_error(error: subprocess.CalledProcessError) -> str:
+    output = "\n".join(
+        part for part in (error.stderr, error.stdout, str(error)) if part
+    )
+    output = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    ignored_fragments = (
+        "Give Feedback / Get Help",
+        "LiteLLM.Info",
+        "During handling of the above exception",
+        "The above exception was the direct cause",
+    )
+    useful_lines = [
+        line
+        for line in lines
+        if not any(fragment in line for fragment in ignored_fragments)
+    ]
+    priority_fragments = (
+        "litellm.exceptions.",
+        "APIConnectionError",
+        "AuthenticationError",
+        "BadRequestError",
+        "RateLimitError",
+        "ConnectError",
+        "Temporary failure in name resolution",
+        "missing environment variable",
+        "error:",
+    )
+    priority_lines = [
+        line
+        for line in useful_lines
+        if any(fragment in line for fragment in priority_fragments)
+    ]
+    selected = priority_lines[-1:] or useful_lines[-3:] or [str(error)]
+    return " | ".join(selected)
 
 
 def extract_json_output(output: str) -> dict[str, Any]:
@@ -201,6 +270,33 @@ def add_question_scores(
     return rows
 
 
+def update_evaluation_progress(**updates: Any) -> None:
+    EVALUATION_PROGRESS.update(updates)
+
+
+def progress_snapshot() -> EvaluationProgressResult:
+    started_at = EVALUATION_PROGRESS.get("started_at")
+    completed_runs = int(EVALUATION_PROGRESS.get("completed_runs", 0))
+    total_runs = int(EVALUATION_PROGRESS.get("total_runs", 0))
+    elapsed_seconds = time.time() - started_at if started_at else 0.0
+    average_run_seconds = elapsed_seconds / completed_runs if completed_runs else 0.0
+    remaining_runs = max(total_runs - completed_runs, 0)
+    estimated_remaining_seconds = (
+        average_run_seconds * remaining_runs if completed_runs else None
+    )
+    percent_complete = completed_runs / total_runs if total_runs else 0.0
+
+    snapshot = dict(EVALUATION_PROGRESS)
+    snapshot.pop("started_at", None)
+    snapshot.update(
+        elapsed_seconds=elapsed_seconds,
+        average_run_seconds=average_run_seconds,
+        estimated_remaining_seconds=estimated_remaining_seconds,
+        percent_complete=percent_complete,
+    )
+    return EvaluationProgressResult(**snapshot)
+
+
 @mcp.tool(title="List Verified Models")
 def list_models() -> ModelsResult:
     """Return the verified model IDs available for the AoB Ask UI."""
@@ -274,6 +370,7 @@ def ask_aob(
         completed = subprocess.run(
             ["uv", "run", "plan-execute", "--model-id", model_id, "--json", question],
             capture_output=True,
+            env=plan_execute_environment(),
             text=True,
             check=True,
         )
@@ -299,7 +396,6 @@ def ask_aob(
     except subprocess.CalledProcessError as error:
         latency = time.time() - start_time
         logger.error("plan-execute failed: %s", error)
-        raw_output = (error.stdout or error.stderr or "").strip()
         input_tokens = estimate_tokens(question)
 
         return AskResult(
@@ -313,7 +409,7 @@ def ask_aob(
             estimated_total_tokens=input_tokens,
             plan=[] if include_plan else None,
             trajectory=[] if include_trajectory else None,
-            error=raw_output or str(error),
+            error=summarize_process_error(error),
         )
     except json.JSONDecodeError as error:
         latency = time.time() - start_time
@@ -332,6 +428,12 @@ def ask_aob(
             trajectory=[] if include_trajectory else None,
             error=f"Could not parse plan-execute JSON output: {error}",
         )
+
+
+@mcp.tool(title="Get Evaluation Progress")
+def get_evaluation_progress() -> EvaluationProgressResult:
+    """Return progress for the currently running UI evaluation, if any."""
+    return progress_snapshot()
 
 
 @mcp.tool(title="Run AssetOpsBench Evaluation")
@@ -372,19 +474,47 @@ def run_evaluation(
 
     rows: list[EvaluationResultRow] = []
     scored_rows_for_leaderboard: list[dict[str, Any]] = []
+    run_id = uuid.uuid4().hex
+    total_runs = len(clean_questions) * len(clean_model_ids)
+    update_evaluation_progress(
+        active=True,
+        status="running",
+        run_id=run_id,
+        total_runs=total_runs,
+        completed_runs=0,
+        failed_runs=0,
+        current_question_id=None,
+        current_question_number=0,
+        total_questions=len(clean_questions),
+        current_model=None,
+        last_completed=None,
+        started_at=time.time(),
+    )
 
     for question_index, question_text in enumerate(clean_questions, start=1):
         question_data, scored = build_question_data(question_text, question_index)
 
         for model_id in clean_model_ids:
+            update_evaluation_progress(
+                current_question_id=question_data["id"],
+                current_question_number=question_index,
+                current_model=model_id,
+            )
             ask_result = ask_aob(
                 question=question_text,
                 model_id=model_id,
-                include_plan=False,
-                include_trajectory=False,
+                include_plan=True,
+                include_trajectory=True,
             )
 
-            if scored:
+            if not ask_result.success:
+                evaluation = {
+                    "score": 0.0,
+                    "summary": f"run failed: {(ask_result.error or 'unknown error')[:160]}",
+                }
+                score = 0.0
+                evaluation_summary = evaluation["summary"]
+            elif scored:
                 evaluation = evaluate_answer_details(ask_result.answer, question_data)
                 score = evaluation["score"]
                 evaluation_summary = evaluation["summary"]
@@ -412,11 +542,19 @@ def run_evaluation(
                 answer=ask_result.answer,
                 error=ask_result.error,
                 evaluation_details=evaluation,
+                plan=ask_result.plan,
+                trajectory=ask_result.trajectory,
             )
             rows.append(row)
 
             if scored:
                 scored_rows_for_leaderboard.append(row.model_dump())
+
+            update_evaluation_progress(
+                completed_runs=len(rows),
+                failed_runs=sum(1 for result_row in rows if not result_row.success),
+                last_completed=f"{question_data['id']} on {model_label(model_id)}",
+            )
 
     warning = None
     if any(not row.scored for row in rows):
@@ -430,12 +568,19 @@ def run_evaluation(
         leaderboard_rows(summary),
         rows,
     )
-    return EvaluationRunResult(
+    result = EvaluationRunResult(
         success=True,
         leaderboard=leaderboard,
         results=rows,
         warning=warning,
     )
+    update_evaluation_progress(
+        active=False,
+        status="complete",
+        current_question_id=None,
+        current_model=None,
+    )
+    return result
 
 
 def main() -> None:

@@ -796,8 +796,19 @@
       }
 
       .score-cell {
-        color: var(--good);
         font-weight: 760;
+      }
+
+      .score-low {
+        color: var(--error);
+      }
+
+      .score-medium {
+        color: var(--warn);
+      }
+
+      .score-high {
+        color: var(--good);
       }
 
       details {
@@ -837,6 +848,54 @@
         margin: 10px 0 0;
         overflow-wrap: anywhere;
         white-space: pre-wrap;
+      }
+
+      .question-score-grid {
+        display: grid;
+        gap: 7px;
+        grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+        margin-bottom: 12px;
+      }
+
+      .question-score-item {
+        align-items: center;
+        background: var(--soft-gradient);
+        border: 1px solid color-mix(in srgb, var(--line) 84%, var(--panel));
+        border-radius: 7px;
+        display: flex;
+        gap: 8px;
+        justify-content: space-between;
+        min-width: 0;
+        padding: 7px 9px;
+      }
+
+      .question-score-item span {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 720;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .question-score-item strong {
+        font-size: 12px;
+      }
+
+      .response-metrics {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        margin-top: 10px;
+      }
+
+      .response-section-title {
+        color: var(--muted);
+        display: block;
+        font-size: 12px;
+        font-weight: 740;
+        margin-top: 14px;
+        text-transform: uppercase;
       }
 
       .answer,
@@ -914,6 +973,44 @@
         color: var(--muted);
         font-size: 13px;
         margin: 0;
+      }
+
+      .work-current {
+        color: var(--text);
+        font-size: 13px;
+        line-height: 1.35;
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .work-stats {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .work-stat {
+        border-top: 1px solid var(--line);
+        min-width: 0;
+        padding-top: 8px;
+      }
+
+      .work-stat span {
+        color: var(--muted);
+        display: block;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .work-stat strong {
+        color: var(--text);
+        display: block;
+        font-size: 13px;
+        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .progress-track {
@@ -1098,6 +1195,33 @@
       <div class="progress-track" aria-hidden="true">
         <div id="work-progress" class="progress-bar"></div>
       </div>
+      <p id="work-current" class="work-current">Waiting for the first run...</p>
+      <div class="work-stats" aria-label="Evaluation progress">
+        <div class="work-stat">
+          <span>Completed</span>
+          <strong id="work-completed">0 / 0</strong>
+        </div>
+        <div class="work-stat">
+          <span>ETA</span>
+          <strong id="work-eta">Calculating</strong>
+        </div>
+        <div class="work-stat">
+          <span>Elapsed</span>
+          <strong id="work-elapsed">0s</strong>
+        </div>
+        <div class="work-stat">
+          <span>Average</span>
+          <strong id="work-average">--</strong>
+        </div>
+        <div class="work-stat">
+          <span>Failures</span>
+          <strong id="work-failures">0</strong>
+        </div>
+        <div class="work-stat">
+          <span>Last Done</span>
+          <strong id="work-last">None yet</strong>
+        </div>
+      </div>
     </aside>
 
     <script>
@@ -1128,11 +1252,19 @@
       const workTitle = document.getElementById("work-title");
       const workCopy = document.getElementById("work-copy");
       const workProgress = document.getElementById("work-progress");
+      const workCurrent = document.getElementById("work-current");
+      const workCompleted = document.getElementById("work-completed");
+      const workEta = document.getElementById("work-eta");
+      const workElapsed = document.getElementById("work-elapsed");
+      const workAverage = document.getElementById("work-average");
+      const workFailures = document.getElementById("work-failures");
+      const workLast = document.getElementById("work-last");
       let messageCounter = 0;
       const pending = new Map();
       let availableModels = [];
       let evaluationQuestionMetadata = [];
       let workTimer = null;
+      let progressPollTimer = null;
       let askActivityTimer = null;
 
       function notifySize() {
@@ -1250,6 +1382,60 @@
         notifySize();
       }
 
+      function updateWorkFlyout(progress) {
+        const totalRuns = Number(progress.total_runs || 0);
+        const completedRuns = Number(progress.completed_runs || 0);
+        const percentComplete = totalRuns ? Math.min(100, Math.round((completedRuns / totalRuns) * 100)) : 0;
+        const questionNumber = Number(progress.current_question_number || 0);
+        const totalQuestions = Number(progress.total_questions || 0);
+        const questionText = progress.current_question_id
+          ? `Question ${questionNumber}/${totalQuestions} (${progress.current_question_id})`
+          : "Waiting for the next question";
+        const modelText = progress.current_model || "model pending";
+
+        workCopy.textContent = `${percentComplete}% complete · ${completedRuns} of ${totalRuns} run(s)`;
+        workCurrent.textContent = `${questionText} · ${modelText}`;
+        workProgress.style.width = `${Math.max(4, percentComplete)}%`;
+        workCompleted.textContent = `${completedRuns} / ${totalRuns}`;
+        workEta.textContent = formatDuration(progress.estimated_remaining_seconds);
+        workElapsed.textContent = formatDuration(progress.elapsed_seconds);
+        workAverage.textContent = progress.average_run_seconds
+          ? `${formatNumber(progress.average_run_seconds, 1)}s/run`
+          : "--";
+        workFailures.textContent = String(progress.failed_runs || 0);
+        workLast.textContent = progress.last_completed || "None yet";
+      }
+
+      function stopProgressPolling() {
+        clearInterval(progressPollTimer);
+        progressPollTimer = null;
+      }
+
+      function startProgressPolling(totalRuns) {
+        let polling = false;
+
+        stopProgressPolling();
+        progressPollTimer = setInterval(async () => {
+          if (polling) {
+            return;
+          }
+          polling = true;
+          try {
+            const progress = await callTool("get_evaluation_progress", {});
+            if (progress && progress.total_runs) {
+              updateWorkFlyout(progress);
+            }
+            if (progress && !progress.active && progress.status === "complete") {
+              stopProgressPolling();
+            }
+          } catch {
+            workCurrent.textContent = `Waiting for backend progress · ${totalRuns} run(s) queued`;
+          } finally {
+            polling = false;
+          }
+        }, 2000);
+      }
+
       function showWorkFlyout(title, totalRuns) {
         const startedAt = Date.now();
         const stages = [
@@ -1262,23 +1448,36 @@
         clearInterval(workTimer);
         workTitle.textContent = title;
         workCopy.textContent = `Starting ${totalRuns} live run(s)...`;
+        workCurrent.textContent = "Waiting for the first run...";
+        workCompleted.textContent = `0 / ${totalRuns}`;
+        workEta.textContent = "Calculating";
+        workElapsed.textContent = "0s";
+        workAverage.textContent = "--";
+        workFailures.textContent = "0";
+        workLast.textContent = "None yet";
         workProgress.style.width = "8%";
         workFlyout.classList.add("active");
         workFlyout.setAttribute("aria-hidden", "false");
+        startProgressPolling(totalRuns);
 
         workTimer = setInterval(() => {
           const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
           const stage = stages[Math.min(stages.length - 1, Math.floor(elapsedSeconds / 8))];
           const progress = Math.min(92, 10 + elapsedSeconds * 2.5);
-          workCopy.textContent = `${stage} · ${totalRuns} run(s) queued · ${elapsedSeconds}s elapsed`;
-          workProgress.style.width = `${progress}%`;
+          workElapsed.textContent = formatDuration(elapsedSeconds);
+          if (workCompleted.textContent === `0 / ${totalRuns}`) {
+            workCopy.textContent = `${stage} · ${totalRuns} run(s) queued`;
+            workProgress.style.width = `${progress}%`;
+          }
         }, 500);
       }
 
       function completeWorkFlyout(message) {
         clearInterval(workTimer);
         workTimer = null;
+        stopProgressPolling();
         workCopy.textContent = message;
+        workCurrent.textContent = "All requested runs finished.";
         workProgress.style.width = "100%";
         setTimeout(() => {
           workFlyout.classList.remove("active");
@@ -1289,6 +1488,7 @@
       function hideWorkFlyout(message) {
         clearInterval(workTimer);
         workTimer = null;
+        stopProgressPolling();
         if (message) {
           workCopy.textContent = message;
         }
@@ -1436,6 +1636,27 @@
         return Number(value || 0).toFixed(digits);
       }
 
+      function formatDuration(seconds) {
+        if (seconds === null || seconds === undefined || Number.isNaN(Number(seconds))) {
+          return "Calculating";
+        }
+
+        const totalSeconds = Math.max(0, Math.round(Number(seconds)));
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const remainingSeconds = totalSeconds % 60;
+
+        if (hours > 0) {
+          return `${hours}h ${minutes}m`;
+        }
+
+        if (minutes > 0) {
+          return `${minutes}m ${remainingSeconds}s`;
+        }
+
+        return `${remainingSeconds}s`;
+      }
+
       function appendCell(row, value) {
         const cell = document.createElement("td");
         cell.textContent = value;
@@ -1541,16 +1762,9 @@
         const table = document.createElement("table");
         const thead = document.createElement("thead");
         const headerRow = document.createElement("tr");
-        const questionIds = [
-          ...new Set(rows.flatMap((row) => Object.keys(row.question_scores || {}))),
-        ];
-        const questionLabels = questionIds.map((questionId) => {
-          const metadata = evaluationQuestionMetadata.find((question) => question.id === questionId);
-          return metadata ? metadata.id.toUpperCase() : questionId.toUpperCase();
-        });
         const headers = [
           "Model",
-          ...questionLabels,
+          "Questions",
           "Average Score",
           "Average Latency",
           "Average Tokens",
@@ -1568,20 +1782,99 @@
         rows.forEach((row) => {
           const tr = document.createElement("tr");
           appendCell(tr, row.model).className = "model-cell";
-          questionIds.forEach((questionId) => {
-            const score = row.question_scores ? row.question_scores[questionId] : undefined;
-            appendCell(tr, score === undefined ? "—" : formatPercent(score)).className = "score-cell";
-          });
-          appendCell(tr, formatPercent(row.average_evaluator_score)).className = "score-cell";
+          appendCell(tr, row.total_questions || 0);
+          applyScoreTone(
+            appendCell(tr, formatPercent(row.average_evaluator_score)),
+            row.average_evaluator_score,
+          );
           appendCell(tr, `${formatNumber(row.average_latency, 2)}s`);
           appendCell(tr, formatNumber(row.average_total_tokens));
-          appendCell(tr, formatNumber(row.quality_weighted_score_per_1k_tokens, 2)).className = "score-cell";
+          appendCell(tr, formatNumber(row.quality_weighted_score_per_1k_tokens, 2));
           tbody.appendChild(tr);
         });
 
         table.append(thead, tbody);
         tableWrap.appendChild(table);
         leaderboardEl.append(title, tableWrap);
+      }
+
+      function appendMetric(container, label, value) {
+        const metric = document.createElement("div");
+        metric.className = "metric";
+
+        const labelEl = document.createElement("span");
+        labelEl.textContent = label;
+
+        const valueEl = document.createElement("strong");
+        valueEl.textContent = value;
+
+        metric.append(labelEl, valueEl);
+        container.appendChild(metric);
+        return metric;
+      }
+
+      function appendTraceSection(container, title, steps, type) {
+        if (!steps.length) {
+          return;
+        }
+
+        const trace = document.createElement("details");
+        trace.className = "trace";
+
+        const summary = document.createElement("summary");
+        const summaryText = document.createElement("span");
+        summaryText.textContent = title;
+        const summaryCount = document.createElement("span");
+        summaryCount.className = "trace-count";
+        summaryCount.textContent = `${steps.length} step(s)`;
+        summary.append(summaryText, summaryCount);
+
+        const traceBody = document.createElement("div");
+        traceBody.className = "trace-body";
+
+        steps.forEach((step) => {
+          const row = document.createElement("div");
+          row.className = "trace-row";
+
+          const titleEl = document.createElement("strong");
+          titleEl.textContent = type === "plan"
+            ? `Plan ${step.step || ""}`.trim()
+            : `${step.success ? "OK" : "Error"}: step ${step.step || ""}`.trim();
+
+          const meta = document.createElement("span");
+          meta.className = "trace-step-meta";
+          meta.textContent = `${step.server || "server"} · ${step.tool || "tool"}`;
+
+          row.append(titleEl, meta);
+
+          const detail = document.createElement("span");
+          detail.className = "trace-step-task";
+          detail.textContent = type === "plan"
+            ? (step.task || "")
+            : (step.response || step.error || "");
+          row.appendChild(detail);
+          traceBody.appendChild(row);
+        });
+
+        trace.append(summary, traceBody);
+        container.appendChild(trace);
+      }
+
+      function applyScoreTone(cell, score) {
+        cell.classList.add("score-cell");
+
+        if (score < 0.4) {
+          cell.classList.add("score-low");
+          return cell;
+        }
+
+        if (score < 0.75) {
+          cell.classList.add("score-medium");
+          return cell;
+        }
+
+        cell.classList.add("score-high");
+        return cell;
       }
 
       function renderResponses(rows) {
@@ -1613,18 +1906,49 @@
           const body = document.createElement("div");
           body.className = "response-body";
 
+          const scoreGrid = document.createElement("div");
+          scoreGrid.className = "question-score-grid";
+          modelRows.forEach((row) => {
+            const item = document.createElement("div");
+            item.className = "question-score-item";
+
+            const questionId = document.createElement("span");
+            questionId.textContent = row.question_id;
+
+            const score = document.createElement("strong");
+            score.textContent = row.scored ? formatPercent(row.score) : "Not scored";
+            if (row.scored) {
+              applyScoreTone(score, row.score);
+            }
+
+            item.append(questionId, score);
+            scoreGrid.appendChild(item);
+          });
+          body.appendChild(scoreGrid);
+
           modelRows.forEach((row) => {
             const details = document.createElement("details");
             const summary = document.createElement("summary");
             summary.textContent = `${row.question_id} · ${formatPercent(row.score)} · ${row.evaluation_summary}`;
 
-            const meta = document.createElement("div");
-            meta.className = "status";
-            meta.textContent = `Success: ${row.success} · Latency: ${formatNumber(row.latency, 2)}s · Tokens: ${row.estimated_total_tokens}`;
+            const metrics = document.createElement("div");
+            metrics.className = "response-metrics";
+            appendMetric(metrics, "Success", String(row.success));
+            appendMetric(metrics, "Score", row.scored ? formatPercent(row.score) : "Not scored");
+            appendMetric(metrics, "Latency", `${formatNumber(row.latency, 2)}s`);
+            appendMetric(metrics, "Tokens", row.estimated_total_tokens ?? 0);
+
+            const evaluation = document.createElement("p");
+            evaluation.className = "response-text";
+            evaluation.textContent = `Evaluation: ${row.evaluation_summary}`;
 
             const question = document.createElement("p");
             question.className = "response-text";
             question.textContent = `Question: ${row.question}`;
+
+            const answerTitle = document.createElement("strong");
+            answerTitle.className = "response-section-title";
+            answerTitle.textContent = "Response";
 
             const answer = document.createElement("p");
             answer.className = "response-text";
@@ -1632,7 +1956,9 @@
 
             const responseBody = document.createElement("div");
             responseBody.className = "response-body";
-            responseBody.append(meta, question, answer);
+            responseBody.append(metrics, evaluation, question, answerTitle, answer);
+            appendTraceSection(responseBody, "Plan", row.plan || [], "plan");
+            appendTraceSection(responseBody, "Execution", row.trajectory || [], "execution");
 
             details.append(summary, responseBody);
             body.appendChild(details);
